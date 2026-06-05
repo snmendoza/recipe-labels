@@ -1,0 +1,33 @@
+name: "Recipe Labels"
+description: "Dictate recipes, compute macros, print nutrition labels + barcodes to a WiFi label printer."
+version: "0.1.0"
+slug: "recipe_labels"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+url: "https://github.com/YOUR_USERNAME/recipe-labels"
+ingress: true
+ingress_port: 5000
+panel_icon: "mdi:food-apple-outline"
+panel_title: "Recipe Labels"
+homeassistant_api: false
+host_network: true
+options:
+  anthropic_api_key: ""
+  printer_name: "Rollo"
+  label_size_nutrition: "1.5x1.5"
+  label_size_recipe: "1.5x1.5"
+  serving_size_default: "100g"
+schema:
+  anthropic_api_key: "str"
+  printer_name: "str"
+  label_size_nutrition: "str"
+  label_size_recipe: "str"
+  serving_size_default: "str"
+map:
+  - data:rw
+ports:
+  5000/tcp: null
+startup: "application"
+init: false
