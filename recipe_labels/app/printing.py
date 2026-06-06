@@ -65,16 +65,35 @@ def _print_ipp(png_path, ipp_uri):
         method="POST",
     )
 
-    try:
-        resp = urllib.request.urlopen(req, timeout=30, context=_SSL_CTX)
-        resp_data = resp.read()
-        # Check IPP status in response (bytes 2-3)
-        if len(resp_data) >= 4:
-            status = struct.unpack(">H", resp_data[2:4])[0]
-            if status > 0x00FF:
-                raise PrintError(f"IPP error status: 0x{status:04x}")
-    except urllib.error.URLError as e:
-        raise PrintError(f"IPP connection failed: {e}")
+    import time
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            resp = urllib.request.urlopen(req, timeout=30, context=_SSL_CTX)
+            resp_data = resp.read()
+            if len(resp_data) >= 4:
+                status = struct.unpack(">H", resp_data[2:4])[0]
+                if status == 0x0507 and attempt < max_retries - 1:
+                    # Printer busy — wait and retry
+                    time.sleep(3)
+                    # Rebuild request (urllib consumes it)
+                    req = urllib.request.Request(
+                        http_url, data=ipp_body,
+                        headers={"Content-Type": "application/ipp"}, method="POST",
+                    )
+                    continue
+                if status > 0x00FF:
+                    raise PrintError(f"IPP error status: 0x{status:04x}")
+            return  # success
+        except urllib.error.URLError as e:
+            if attempt < max_retries - 1:
+                time.sleep(3)
+                req = urllib.request.Request(
+                    http_url, data=ipp_body,
+                    headers={"Content-Type": "application/ipp"}, method="POST",
+                )
+                continue
+            raise PrintError(f"IPP connection failed: {e}")
 
 
 def _build_ipp_print_job(printer_uri, file_data):
