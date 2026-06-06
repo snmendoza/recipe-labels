@@ -5,7 +5,6 @@ slug: "recipe_labels"
 arch:
   - amd64
   - aarch64
-  - armv7
 url: "https://github.com/snmendoza/recipe-labels"
 ingress: true
 ingress_port: 5000
