@@ -7,6 +7,7 @@ RUN apk add --no-cache \
     py3-pip \
     cups-client \
     font-dejavu \
+    jq \
     gcc \
     musl-dev \
     python3-dev \

@@ -1,11 +1,16 @@
-#!/usr/bin/env bashio
+#!/usr/bin/with-contenv bash
 
-# Read config from HA options
-export ANTHROPIC_API_KEY=$(bashio::config 'anthropic_api_key')
-export PRINTER_NAME=$(bashio::config 'printer_name')
-export LABEL_SIZE_NUTRITION=$(bashio::config 'label_size_nutrition')
-export LABEL_SIZE_RECIPE=$(bashio::config 'label_size_recipe')
-export SERVING_SIZE_DEFAULT=$(bashio::config 'serving_size_default')
+# Read config from /data/options.json (always available in HA add-ons)
+OPTIONS="/data/options.json"
+
+if [ -f "$OPTIONS" ]; then
+  export ANTHROPIC_API_KEY=$(jq -r '.anthropic_api_key' "$OPTIONS")
+  export PRINTER_NAME=$(jq -r '.printer_name' "$OPTIONS")
+  export LABEL_SIZE_NUTRITION=$(jq -r '.label_size_nutrition' "$OPTIONS")
+  export LABEL_SIZE_RECIPE=$(jq -r '.label_size_recipe' "$OPTIONS")
+  export SERVING_SIZE_DEFAULT=$(jq -r '.serving_size_default' "$OPTIONS")
+fi
+
 export DATA_DIR="/data"
 
 # Ensure data dirs exist
