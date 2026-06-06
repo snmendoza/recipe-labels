@@ -1,5 +1,6 @@
-"""CUPS/IPP print dispatch for label PNGs."""
+"""Print dispatch for label PNGs — supports both CUPS (local) and IPP (network)."""
 
+import os
 import subprocess
 
 
@@ -8,32 +9,85 @@ class PrintError(Exception):
     pass
 
 
+def _is_ipp_uri(printer_name):
+    """Check if printer_name is an IPP URI (ipp:// or http://)."""
+    return printer_name.startswith(("ipp://", "http://", "ipps://", "https://"))
+
+
 def print_label(png_path, printer_name, copies=1, label_size="1.5x1.5"):
-    """Send a label PNG to the specified CUPS printer.
+    """Send a label PNG to a printer via CUPS or direct IPP.
 
-    Args:
-        png_path: Path to the PNG file.
-        printer_name: CUPS printer name (e.g. "Rollo_X1040").
-        copies: Number of copies to print.
-        label_size: Label dimensions in inches (e.g. "1.5x1.5").
-
-    Returns:
-        stdout from the lp command.
-
-    Raises:
-        PrintError: If the lp command fails.
+    If printer_name looks like an IPP URI (ipp://...), use ipptool or
+    lp with the URI directly. Otherwise, treat it as a CUPS queue name.
     """
+    for _ in range(copies):
+        if _is_ipp_uri(printer_name):
+            _print_ipp(png_path, printer_name)
+        else:
+            _print_cups(png_path, printer_name, label_size)
+
+
+def _print_cups(png_path, printer_name, label_size):
+    """Print via local CUPS queue."""
     cmd = [
         "lp",
         "-d", printer_name,
         "-o", f"media=Custom.{label_size}in",
-        "-n", str(copies),
         png_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise PrintError(f"lp failed: {result.stderr}")
     return result.stdout
+
+
+def _print_ipp(png_path, ipp_uri):
+    """Print via direct IPP to a network printer."""
+    # Use lp with -h (remote host) by parsing the URI,
+    # or use ipptool for raw IPP.
+    # Simplest: use lp pointed at the IPP URI directly
+    cmd = [
+        "lp",
+        "-d", ipp_uri,
+        png_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        # Fallback: try ipptool Print-Job
+        _print_ipp_raw(png_path, ipp_uri)
+
+
+def _print_ipp_raw(png_path, ipp_uri):
+    """Print via raw IPP Print-Job request using ipptool."""
+    # Normalize URI
+    uri = ipp_uri
+    if uri.startswith("http://"):
+        uri = "ipp://" + uri[7:]
+
+    cmd = [
+        "ipptool",
+        "-tf", png_path,
+        uri,
+        "-d", "filetype=image/png",
+        "/dev/stdin",
+    ]
+    ipp_request = """{
+OPERATION Print-Job
+GROUP operation-attributes-tag
+ATTR charset attributes-charset utf-8
+ATTR naturalLanguage attributes-natural-language en
+ATTR uri printer-uri $uri
+ATTR name requesting-user-name "recipe-labels"
+ATTR mimeMediaType document-format image/png
+FILE $filename
+}"""
+    result = subprocess.run(
+        ["ipptool", "-tf", png_path, uri, "-"],
+        input=ipp_request,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise PrintError(f"IPP print failed: {result.stderr}")
 
 
 def discover_printers():
@@ -51,7 +105,6 @@ def discover_printers():
 
         printers = []
         for line in result.stdout.splitlines():
-            # Lines look like: "printer Rollo_X1040 is idle. ..."
             if line.startswith("printer "):
                 parts = line.split()
                 if len(parts) >= 2:
@@ -68,6 +121,9 @@ def get_printer_media(printer_name):
         dict with "current" (e.g. "4x6"), "available" (list of sizes),
         and "match" (bool, True if current == 1.5x1.5).
     """
+    if _is_ipp_uri(printer_name):
+        # Can't query media from raw IPP easily; skip
+        return {"current": None, "available": [], "match": True}
     try:
         result = subprocess.run(
             ["lpoptions", "-p", printer_name, "-l"],
@@ -78,7 +134,6 @@ def get_printer_media(printer_name):
 
         for line in result.stdout.splitlines():
             if line.startswith("PageSize/") or line.startswith("MediaSize/"):
-                # e.g. "PageSize/Media Size: 1.5x1.5 2x1 *4x6 Custom.WIDTHxHEIGHT"
                 _, _, options_str = line.partition(": ")
                 options = options_str.split()
                 current = None
