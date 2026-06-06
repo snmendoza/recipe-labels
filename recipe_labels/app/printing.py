@@ -1,9 +1,15 @@
 """Print dispatch for label PNGs — supports both CUPS (local) and IPP (network)."""
 
 import os
+import ssl
 import struct
 import subprocess
 import urllib.request
+
+# Printers use self-signed certs — skip verification
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 
 class PrintError(Exception):
@@ -39,10 +45,10 @@ def _print_cups(png_path, printer_name, label_size):
 
 def _print_ipp(png_path, ipp_uri):
     """Print via direct IPP Print-Job request (pure Python, no ipptool)."""
-    # Convert ipp:// to http:// for urllib
+    # Convert ipp(s):// to https:// — most modern printers require TLS
     http_url = ipp_uri
     if http_url.startswith("ipp://"):
-        http_url = "http://" + http_url[6:]
+        http_url = "https://" + http_url[6:]
     elif http_url.startswith("ipps://"):
         http_url = "https://" + http_url[7:]
 
@@ -60,7 +66,7 @@ def _print_ipp(png_path, ipp_uri):
     )
 
     try:
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = urllib.request.urlopen(req, timeout=30, context=_SSL_CTX)
         resp_data = resp.read()
         # Check IPP status in response (bytes 2-3)
         if len(resp_data) >= 4:
