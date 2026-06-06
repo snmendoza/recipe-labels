@@ -38,7 +38,7 @@ Browser (phone/tablet) --> Flask (HA add-on) --> Anthropic API (macro computatio
 ## Development (Local)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/recipe-labels.git
+git clone https://github.com/snmendoza/recipe-labels.git
 cd recipe-labels
 pip install -r requirements.txt
 

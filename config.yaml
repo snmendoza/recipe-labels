@@ -6,7 +6,7 @@ arch:
   - amd64
   - aarch64
   - armv7
-url: "https://github.com/YOUR_USERNAME/recipe-labels"
+url: "https://github.com/snmendoza/recipe-labels"
 ingress: true
 ingress_port: 5000
 panel_icon: "mdi:food-apple-outline"
