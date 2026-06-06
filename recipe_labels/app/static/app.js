@@ -41,7 +41,8 @@ const historySearch = document.getElementById('history-search');
 const historyList = document.getElementById('history-list');
 
 // --- State ---
-let currentData = null;  // full response from /api/parse (includes label URLs)
+let currentData = null;  // full data for the active recipe (from parse or history)
+let isReprintMode = false; // true when viewing a stored recipe
 
 // --- API helper ---
 async function api(path, options = {}) {
@@ -61,7 +62,6 @@ async function checkHealth() {
       healthStatus.className = 'status-dot ok';
       healthStatus.title = `Printer: ${r.data.printer || 'none'} | Recipes: ${r.data.recipes_count}`;
 
-      // Check printer media
       const media = r.data.printer_media;
       if (media && media.current && !media.match) {
         mediaWarning.textContent = `Warning: Rollo has ${media.current} labels loaded — need 1.5x1.5`;
@@ -135,6 +135,7 @@ parseBtn.addEventListener('click', async () => {
     }
 
     currentData = r.data;
+    isReprintMode = false;
     showConfirmation(r.data);
   } catch (e) {
     parseError.textContent = `Error: ${e.message}`;
@@ -195,7 +196,7 @@ function showConfirmation(data) {
 
   // Similar recipes
   const similar = data.similar_recipes || [];
-  if (similar.length) {
+  if (similar.length && !isReprintMode) {
     const names = similar.map(s => `${s.name} (${Math.round(s.similarity * 100)}%)`).join(', ');
     similarWarning.textContent = `Similar recipes found: ${names}`;
     similarWarning.classList.remove('hidden');
@@ -205,7 +206,11 @@ function showConfirmation(data) {
     reuseUpc.value = similar[0].upc || '';
   } else {
     similarWarning.classList.add('hidden');
-    recipeStatus.value = 'new';
+    if (isReprintMode) {
+      recipeStatus.value = 'repeat';
+    } else {
+      recipeStatus.value = 'new';
+    }
     iterationOfRow.classList.add('hidden');
     iterationOf.value = '';
     reuseUpc.value = '';
@@ -216,7 +221,7 @@ function showConfirmation(data) {
   recipePreview.src = data.recipe_label;
   upcCode.textContent = data.upc;
 
-  // Media warning in confirmation panel
+  // Media warning
   const media = data.printer_media;
   if (media && media.current && !media.match) {
     mediaWarningConfirm.textContent = `Warning: Rollo has ${media.current} labels loaded — need 1.5x1.5`;
@@ -233,6 +238,125 @@ function showConfirmation(data) {
   confirmSection.classList.remove('hidden');
 }
 
+// --- Load a stored recipe into the confirmation panel ---
+async function loadStoredRecipe(entry) {
+  const macros = entry.macros || {};
+  const title = entry.full_name;
+  const suffix = entry.suffix || '';
+  const ingredients = entry.ingredients || [];
+  const upc = entry.upc || '';
+  const totalWeight = parseInt(entry.total_weight) || 0;
+
+  // Generate labels from stored data (no Anthropic API call)
+  const genResult = await api('/api/generate', {
+    method: 'POST',
+    body: JSON.stringify({
+      title,
+      cal: macros.cal || 0,
+      fat: macros.fat || 0,
+      protein: macros.protein || 0,
+      carb: macros.carb || 0,
+      serving: entry.serving_size || '100g',
+      total_weight: totalWeight,
+      ingredients,
+      suffix,
+      status: 'repeat',
+      upc,
+      iteration_of: '',
+    }),
+  });
+
+  if (!genResult.success) {
+    alert(`Failed to generate labels: ${genResult.error}`);
+    return;
+  }
+
+  // Build currentData in the same shape as /api/parse returns
+  currentData = {
+    title,
+    suffix,
+    upc,
+    total_weight: totalWeight,
+    nutrition_label: genResult.data.nutrition_label,
+    recipe_label: genResult.data.recipe_label,
+    nutrition_filename: genResult.data.nutrition_filename,
+    recipe_filename: genResult.data.recipe_filename,
+    similar_recipes: [],
+    printer_media: {},
+    macros: {
+      ingredients: ingredients.map(ingr => ({
+        original: ingr,
+        grams: parseInt(ingr) || 0,
+        cal: 0, fat: 0, protein: 0, carb: 0,
+      })),
+      totals: { grams: totalWeight, cal: 0, fat: 0, protein: 0, carb: 0 },
+      per_100g: macros,
+      warnings: [],
+    },
+  };
+
+  isReprintMode = true;
+  showStoredRecipe(entry, genResult.data);
+}
+
+function showStoredRecipe(entry, genData) {
+  const macros = entry.macros || {};
+  const ingredients = entry.ingredients || [];
+
+  recipeName.value = entry.full_name;
+  recipeSuffix.value = entry.suffix || '';
+
+  // Ingredient table — simple list (no per-ingredient macros for stored recipes)
+  ingredientTableBody.innerHTML = '';
+  ingredients.forEach(ingr => {
+    const tr = document.createElement('tr');
+    const grams = parseInt(ingr) || '';
+    tr.innerHTML = `
+      <td>${escHtml(ingr)}</td>
+      <td>${grams}</td>
+      <td></td><td></td><td></td><td></td>
+    `;
+    ingredientTableBody.appendChild(tr);
+  });
+
+  // Hide totals row (no per-ingredient breakdown for stored recipes)
+  const cells = totalsRow.querySelectorAll('td');
+  cells[1].textContent = entry.total_weight || '';
+  cells[2].textContent = '';
+  cells[3].textContent = '';
+  cells[4].textContent = '';
+  cells[5].textContent = '';
+
+  // Per 100g
+  per100Cal.value = macros.cal || 0;
+  per100Fat.value = macros.fat || 0;
+  per100Protein.value = macros.protein || 0;
+  per100Carb.value = macros.carb || 0;
+
+  // No warnings for stored recipes
+  calorieWarning.classList.add('hidden');
+  similarWarning.classList.add('hidden');
+
+  // Label previews
+  nutritionPreview.src = genData.nutrition_label;
+  recipePreview.src = genData.recipe_label;
+  upcCode.textContent = genData.upc || entry.upc || '';
+
+  mediaWarningConfirm.classList.add('hidden');
+
+  // Pre-set to repeat
+  recipeStatus.value = 'repeat';
+  iterationOfRow.classList.add('hidden');
+
+  // Reset print state
+  printStatus.classList.add('hidden');
+  printError.classList.add('hidden');
+
+  inputSection.classList.add('hidden');
+  confirmSection.classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 // Status change handler
 recipeStatus.addEventListener('change', () => {
   if (recipeStatus.value === 'iteration' || recipeStatus.value === 'repeat') {
@@ -246,9 +370,10 @@ recipeStatus.addEventListener('change', () => {
 backBtn.addEventListener('click', () => {
   confirmSection.classList.add('hidden');
   inputSection.classList.remove('hidden');
+  isReprintMode = false;
 });
 
-// --- Print (save to recipes.md + send to printer) ---
+// --- Print ---
 printBtn.addEventListener('click', async () => {
   if (!currentData) return;
 
@@ -260,32 +385,35 @@ printBtn.addEventListener('click', async () => {
 
   try {
     const status = recipeStatus.value;
-    const macros = currentData.macros || {};
-    const ingredients = (macros.ingredients || []).map(i => i.original);
 
-    // Save recipe to recipes.md (via generate endpoint which handles this)
-    const genResult = await api('/api/generate', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: recipeName.value.trim(),
-        cal: parseInt(per100Cal.value) || 0,
-        fat: parseFloat(per100Fat.value) || 0,
-        protein: parseFloat(per100Protein.value) || 0,
-        carb: parseFloat(per100Carb.value) || 0,
-        serving: '100g',
-        total_weight: currentData.total_weight || 0,
-        ingredients,
-        suffix: recipeSuffix.value,
-        status,
-        upc: currentData.upc || '',
-        iteration_of: status === 'iteration' ? iterationOf.value : '',
-      }),
-    });
+    // For new recipes or iterations, save to recipes.md via generate
+    if (status !== 'repeat' && !isReprintMode) {
+      const macros = currentData.macros || {};
+      const ingredients = (macros.ingredients || []).map(i => i.original);
 
-    if (!genResult.success) {
-      printError.textContent = genResult.error || 'Save failed';
-      printError.classList.remove('hidden');
-      return;
+      const genResult = await api('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: recipeName.value.trim(),
+          cal: parseInt(per100Cal.value) || 0,
+          fat: parseFloat(per100Fat.value) || 0,
+          protein: parseFloat(per100Protein.value) || 0,
+          carb: parseFloat(per100Carb.value) || 0,
+          serving: '100g',
+          total_weight: currentData.total_weight || 0,
+          ingredients,
+          suffix: recipeSuffix.value,
+          status,
+          upc: currentData.upc || '',
+          iteration_of: status === 'iteration' ? iterationOf.value : '',
+        }),
+      });
+
+      if (!genResult.success) {
+        printError.textContent = genResult.error || 'Save failed';
+        printError.classList.remove('hidden');
+        return;
+      }
     }
 
     // Print
@@ -304,7 +432,7 @@ printBtn.addEventListener('click', async () => {
       });
 
       if (printResult.success) {
-        printStatus.textContent = `Printed: ${(printResult.data.printed || []).join(', ')} to ${printResult.data.printer}. UPC: ${currentData.upc} — scan in MacroFactor.`;
+        printStatus.textContent = `Printed: ${(printResult.data.printed || []).join(', ')} to ${printResult.data.printer}. UPC: ${currentData.upc}`;
         printStatus.className = 'success';
         printStatus.classList.remove('hidden');
       } else {
@@ -312,7 +440,7 @@ printBtn.addEventListener('click', async () => {
         printError.classList.remove('hidden');
       }
     } else {
-      printStatus.textContent = `Saved. UPC: ${currentData.upc} — labels in preview above.`;
+      printStatus.textContent = `Labels ready. UPC: ${currentData.upc}`;
       printStatus.className = 'success';
       printStatus.classList.remove('hidden');
     }
@@ -334,16 +462,11 @@ function resetToInput() {
   inputSection.classList.remove('hidden');
   ingredientsInput.value = '';
   currentData = null;
+  isReprintMode = false;
   printStatus.classList.add('hidden');
   printError.classList.add('hidden');
   loadHistory();
 }
-
-// Listen for "New Recipe" action via keyboard shortcut or clicking back after print
-backBtn.addEventListener('click', () => {
-  confirmSection.classList.add('hidden');
-  inputSection.classList.remove('hidden');
-});
 
 // --- History ---
 async function loadHistory() {
@@ -374,12 +497,7 @@ function renderHistory(entries, filter = '') {
           &middot; UPC: ${entry.upc || ''}
         </div>
       `;
-      div.addEventListener('click', () => {
-        ingredientsInput.value = (entry.ingredients || []).join(', ');
-        inputSection.classList.remove('hidden');
-        confirmSection.classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      });
+      div.addEventListener('click', () => loadStoredRecipe(entry));
       historyList.appendChild(div);
     });
 

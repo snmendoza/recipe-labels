@@ -1,6 +1,6 @@
 name: "Recipe Labels"
 description: "Dictate recipes, compute macros, print nutrition labels + barcodes to a WiFi label printer."
-version: "0.1.5"
+version: "0.1.6"
 slug: "recipe_labels"
 arch:
   - amd64
