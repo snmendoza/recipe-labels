@@ -61,6 +61,16 @@ header h1 {
 .status-dot.ok { background: var(--success); }
 .status-dot.error { background: var(--danger); }
 
+.media-warning {
+  background: rgba(255, 212, 59, 0.15);
+  color: var(--warning);
+  text-align: center;
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(255, 212, 59, 0.3);
+}
+
 main {
   max-width: 640px;
   margin: 0 auto;

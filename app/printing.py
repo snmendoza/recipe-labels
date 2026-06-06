@@ -59,3 +59,43 @@ def discover_printers():
         return printers
     except FileNotFoundError:
         return []
+
+
+def get_printer_media(printer_name):
+    """Query the current media size selected on a printer.
+
+    Returns:
+        dict with "current" (e.g. "4x6"), "available" (list of sizes),
+        and "match" (bool, True if current == 1.5x1.5).
+    """
+    try:
+        result = subprocess.run(
+            ["lpoptions", "-p", printer_name, "-l"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return {"current": None, "available": [], "match": False}
+
+        for line in result.stdout.splitlines():
+            if line.startswith("PageSize/") or line.startswith("MediaSize/"):
+                # e.g. "PageSize/Media Size: 1.5x1.5 2x1 *4x6 Custom.WIDTHxHEIGHT"
+                _, _, options_str = line.partition(": ")
+                options = options_str.split()
+                current = None
+                available = []
+                for opt in options:
+                    clean = opt.lstrip("*")
+                    if clean.startswith("Custom"):
+                        continue
+                    available.append(clean)
+                    if opt.startswith("*"):
+                        current = clean
+                return {
+                    "current": current,
+                    "available": available,
+                    "match": current == "1.5x1.5",
+                }
+
+        return {"current": None, "available": [], "match": False}
+    except FileNotFoundError:
+        return {"current": None, "available": [], "match": False}

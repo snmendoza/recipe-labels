@@ -130,7 +130,7 @@ def validate_upc(upc_str):
     return digits[11] == check
 
 
-def _render_barcode_image(upc_str):
+def _render_barcode_image(upc_str, target_w=340, target_h=55):
     """Render a UPC-A barcode and return as a PIL Image (bars only, no text)."""
     import barcode
     from barcode.writer import ImageWriter
@@ -141,9 +141,9 @@ def _render_barcode_image(upc_str):
     upc_code.write(buf, options={
         "write_text": False,
         "font_size": 0,
-        "module_width": 0.33,
-        "module_height": 8.0,
-        "quiet_zone": 2.0,
+        "module_width": 0.4,
+        "module_height": 10.0,
+        "quiet_zone": 1.5,
     })
     buf.seek(0)
     bc_img = Image.open(buf).convert("RGBA")
@@ -152,11 +152,58 @@ def _render_barcode_image(upc_str):
     if bbox:
         bc_img = bc_img.crop(bbox)
 
-    target_w = 280
-    ratio = target_w / bc_img.width
-    new_h = int(bc_img.height * ratio)
-    bc_img = bc_img.resize((target_w, new_h), Image.LANCZOS)
+    bc_img = bc_img.resize((target_w, target_h), Image.LANCZOS)
     return bc_img
+
+
+def _normalize_ingredient(text):
+    """Shorten ingredient text for label display.
+
+    'one liter of whole milk' → '1000g whole milk'
+    'two tablespoons Hershey cocoa powder (approx 10g each = 20g)' → '20g cocoa powder'
+    'three scoops whey protein (approx 31g per scoop = 93g)' → '93g whey protein'
+    '30 grams of sugar' → '30g sugar'
+    """
+    s = text.strip()
+
+    # Remove parenthetical clarifications but extract gram value if present
+    paren_grams = re.search(r"\(.*?=\s*(\d+)g\)", s)
+    if paren_grams:
+        gram_val = paren_grams.group(1)
+        # Remove the parenthetical
+        s = re.sub(r"\s*\([^)]*\)", "", s).strip()
+        # Remove the leading quantity and unit, replace with extracted grams
+        s = re.sub(r"^[\w\s]+?(tablespoons?|tbsp|teaspoons?|tsp|cups?|scoops?|liters?)\s+", "", s, flags=re.IGNORECASE)
+        s = f"{gram_val}g {s}"
+        return s
+
+    # Word numbers → digits
+    word_nums = {
+        "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+        "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+        "half": "0.5", "a": "1",
+    }
+    words = s.split()
+    if words and words[0].lower() in word_nums:
+        words[0] = word_nums[words[0].lower()]
+        s = " ".join(words)
+
+    # "30 grams of sugar" → "30g sugar"
+    s = re.sub(r"(\d+\.?\d*)\s*grams?\s+of\s+", r"\1g ", s)
+    s = re.sub(r"(\d+\.?\d*)\s*grams?\s+", r"\1g ", s)
+
+    # Unit abbreviations
+    s = re.sub(r"(\d+\.?\d*)\s*tablespoons?\s+", r"\1tbsp ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(\d+\.?\d*)\s*teaspoons?\s+", r"\1tsp ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(\d+\.?\d*)\s*cups?\s+", r"\1cup ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(\d+\.?\d*)\s*scoops?\s+", r"\1scoop ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(\d+\.?\d*)\s*liters?\s+", r"\1L ", s, flags=re.IGNORECASE)
+
+    # Remove filler words
+    s = re.sub(r"\bof\b\s*", "", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+
+    return s
 
 
 def slugify(title):
@@ -164,68 +211,72 @@ def slugify(title):
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
 
+def _wrap_text(draw, text, font, max_width):
+    """Word-wrap text to fit within max_width. Returns list of lines."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        test = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
 def generate_nutrition_label(title, cal, fat, protein, carb, serving, upc_str, output_path):
     """Generate the 1.5" round nutrition facts label.
 
-    Returns the output_path for chaining.
+    Designed for thermal printers (~203 DPI): large fonts, tight margins,
+    multi-line title wrapping, content fills the circle.
     """
     img = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    # Pick font sizes based on title length
-    title_size = 20
-    if len(title) > 24:
-        title_size = 17
-    if len(title) > 30:
-        title_size = 14
+    margin_l = 25
+    margin_r = 425
+    content_w = margin_r - margin_l
 
-    f_title = _font_bold(title_size)
-    f_nf = _font_bold(15)
-    f_serving = _font_regular(12)
-    f_cal_label = _font_bold(16)
-    f_cal_val = _font_bold(22)
-    f_row_label = _font_bold(12)
-    f_row_val = _font_regular(12)
-    f_upc_text = _font_regular(13)
+    f_title = _font_bold(28)
+    f_cal_label = _font_bold(28)
+    f_cal_val = _font_bold(40)
+    f_row = _font_bold(24)
+    f_upc_text = _font_regular(14)
 
-    bc_img = _render_barcode_image(upc_str)
+    bc_img = _render_barcode_image(upc_str, target_w=360, target_h=50)
 
-    margin_l = 55
-    margin_r = 395
-
-    # Format macro values
     fat_s = f"{fat:g}g" if isinstance(fat, (int, float)) else f"{fat}g"
     protein_s = f"{protein:g}g" if isinstance(protein, (int, float)) else f"{protein}g"
     carb_s = f"{carb:g}g" if isinstance(carb, (int, float)) else f"{carb}g"
 
-    macro_rows = [
-        ("Total Fat", fat_s),
-        ("Total Carb", carb_s),
-        ("Protein", protein_s),
-    ]
+    # Wrap title
+    title_lines = _wrap_text(draw, title, f_title, content_w)
+    title_line_h = _text_height(draw, title, f_title)
 
-    # Build element list: (kind, height, *extras)
+    # Build elements
     elements = []
-    elements.append(("title", _text_height(draw, title, f_title)))
-    elements.append(("thin_rule", 1))
-    elements.append(("gap", 3))
-    elements.append(("nf", _text_height(draw, "Nutrition Facts", f_nf)))
+    for line in title_lines:
+        elements.append(("title_line", title_line_h + 2, line))
     elements.append(("thick_rule", 3))
-    elements.append(("serving", _text_height(draw, f"Serv. Size {serving}", f_serving)))
-    elements.append(("thin_rule", 1))
-    elements.append(("gap", 2))
+    elements.append(("gap", 5))
     cal_h = max(
         _text_height(draw, "Calories", f_cal_label),
         _text_height(draw, str(cal), f_cal_val),
     )
     elements.append(("calories", cal_h))
     elements.append(("thick_rule", 3))
-    row_h = _text_height(draw, "Total Fat", f_row_label)
-    for i, (label, val) in enumerate(macro_rows):
-        elements.append(("macro_row", row_h, label, val))
-        if i < len(macro_rows) - 1:
-            elements.append(("thin_rule", 1))
-    elements.append(("gap", 5))
+    elements.append(("gap", 4))
+    row_h = _text_height(draw, "Fat", f_row) + 6
+    elements.append(("macro_row", row_h, "Fat", fat_s))
+    elements.append(("macro_row", row_h, "Carb", carb_s))
+    elements.append(("macro_row", row_h, "Protein", protein_s))
+    elements.append(("gap", 6))
     elements.append(("barcode", bc_img.height))
     elements.append(("gap", 2))
     elements.append(("upc_text", _text_height(draw, upc_str, f_upc_text)))
@@ -235,20 +286,14 @@ def generate_nutrition_label(title, cal, fat, protein, carb, serving, upc_str, o
 
     for e in elements:
         kind, h = e[0], e[1]
-        if kind == "title":
-            draw.text((CENTER, y), title, font=f_title, fill="black", anchor="mt")
-        elif kind == "nf":
-            draw.text((CENTER, y), "Nutrition Facts", font=f_nf, fill="black", anchor="mt")
-        elif kind == "serving":
-            draw.text((CENTER, y), f"Serv. Size {serving}", font=f_serving, fill="black", anchor="mt")
+        if kind == "title_line":
+            draw.text((CENTER, y), e[2], font=f_title, fill="black", anchor="mt")
         elif kind == "calories":
             draw.text((margin_l, y), "Calories", font=f_cal_label, fill="black", anchor="lt")
             draw.text((margin_r, y), str(cal), font=f_cal_val, fill="black", anchor="rt")
         elif kind == "macro_row":
-            draw.text((margin_l, y), e[2], font=f_row_label, fill="black", anchor="lt")
-            draw.text((margin_r, y), e[3], font=f_row_val, fill="black", anchor="rt")
-        elif kind == "thin_rule":
-            draw.line([(margin_l, y), (margin_r, y)], fill="black", width=1)
+            draw.text((margin_l, y), e[2], font=f_row, fill="black", anchor="lt")
+            draw.text((margin_r, y), e[3], font=f_row, fill="black", anchor="rt")
         elif kind == "thick_rule":
             draw.rectangle([(margin_l, y), (margin_r, y + 2)], fill="black")
         elif kind == "barcode":
@@ -268,7 +313,7 @@ def generate_recipe_label(title, suffix, ingredients_list, cal, fat, protein, ca
                           total_weight, output_path):
     """Generate the 1.5" round recipe card label.
 
-    Returns the output_path for chaining.
+    Designed for thermal printers: large fonts, tight margins, wrapped title.
     """
     img = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -277,39 +322,42 @@ def generate_recipe_label(title, suffix, ingredients_list, cal, fat, protein, ca
     if suffix and title.endswith(suffix):
         base_name = title[: -len(suffix)].strip()
 
-    title_size = 16
-    if len(base_name) > 22:
-        title_size = 14
+    f_title = _font_bold(26)
+    f_suffix = _font_regular(16)
+    f_ingr = _font_regular(20)
+    f_macro = _font_bold(17)
+    f_total = _font_regular(15)
 
-    f_title = _font_bold(title_size)
-    f_suffix = _font_regular(11)
-    f_ingr = _font_regular(11)
-    f_macro = _font_bold(10)
-    f_total = _font_regular(10)
-
-    margin_l = 65
-    margin_r = 385
-    ingr_lh = 14
+    margin_l = 35
+    margin_r = 415
+    content_w = margin_r - margin_l
+    ingr_lh = 26
 
     fat_s = f"{fat:g}" if isinstance(fat, (int, float)) else str(fat)
     protein_s = f"{protein:g}" if isinstance(protein, (int, float)) else str(protein)
     carb_s = f"{carb:g}" if isinstance(carb, (int, float)) else str(carb)
 
-    macro_line = f"{cal}cal | {fat_s}gF | {protein_s}gP | {carb_s}gC /100g"
-    total_line = f"Total: {total_weight}g"
+    macro_line = f"{cal}cal | {fat_s}gF | {protein_s}gP | {carb_s}gC"
+    total_line = f"Total: {total_weight}g  |  per 100g"
+
+    # Wrap title
+    title_lines = _wrap_text(draw, base_name, f_title, content_w)
+    title_line_h = _text_height(draw, base_name, f_title)
 
     elements = []
-    elements.append(("title", _text_height(draw, base_name, f_title)))
+    for line in title_lines:
+        elements.append(("title_line", title_line_h + 2, line))
     elements.append(("suffix", _text_height(draw, suffix, f_suffix)))
-    elements.append(("gap", 2))
-    elements.append(("thin_rule", 1))
     elements.append(("gap", 3))
+    elements.append(("thick_rule", 2))
+    elements.append(("gap", 4))
     for ingr in ingredients_list:
-        elements.append(("ingredient", ingr_lh, ingr.strip()))
-    elements.append(("gap", 3))
-    elements.append(("thin_rule", 1))
-    elements.append(("gap", 3))
+        elements.append(("ingredient", ingr_lh, _normalize_ingredient(ingr)))
+    elements.append(("gap", 4))
+    elements.append(("thick_rule", 2))
+    elements.append(("gap", 4))
     elements.append(("macro", _text_height(draw, macro_line, f_macro)))
+    elements.append(("gap", 2))
     elements.append(("total_weight", _text_height(draw, total_line, f_total)))
 
     total_h = sum(e[1] for e in elements)
@@ -317,18 +365,18 @@ def generate_recipe_label(title, suffix, ingredients_list, cal, fat, protein, ca
 
     for e in elements:
         kind, h = e[0], e[1]
-        if kind == "title":
-            draw.text((CENTER, y), base_name, font=f_title, fill="black", anchor="mt")
+        if kind == "title_line":
+            draw.text((CENTER, y), e[2], font=f_title, fill="black", anchor="mt")
         elif kind == "suffix":
-            draw.text((CENTER, y), suffix, font=f_suffix, fill=(128, 128, 128, 255), anchor="mt")
+            draw.text((CENTER, y), suffix, font=f_suffix, fill=(100, 100, 100, 255), anchor="mt")
         elif kind == "ingredient":
             draw.text((margin_l, y), e[2], font=f_ingr, fill="black", anchor="lt")
         elif kind == "macro":
             draw.text((CENTER, y), macro_line, font=f_macro, fill="black", anchor="mt")
         elif kind == "total_weight":
             draw.text((CENTER, y), total_line, font=f_total, fill="black", anchor="mt")
-        elif kind == "thin_rule":
-            draw.line([(margin_l, y), (margin_r, y)], fill="black", width=1)
+        elif kind == "thick_rule":
+            draw.rectangle([(margin_l, y), (margin_r, y + 1)], fill="black")
         y += h
 
     img = _apply_circle_mask(img)

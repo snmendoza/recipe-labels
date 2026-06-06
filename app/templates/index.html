@@ -13,6 +13,8 @@
     <span id="health-status" class="status-dot" title="Checking..."></span>
   </header>
 
+  <div id="media-warning" class="media-warning hidden"></div>
+
   <main>
     <!-- Step 1: Input -->
     <section id="input-section" class="card">
@@ -31,7 +33,7 @@
       <div id="parse-error" class="error hidden"></div>
     </section>
 
-    <!-- Step 2: Confirmation -->
+    <!-- Step 2: Confirmation — ingredients + label previews + print -->
     <section id="confirm-section" class="card hidden">
       <h2>Confirm Recipe</h2>
 
@@ -80,6 +82,25 @@
       <div id="calorie-warning" class="warning hidden"></div>
       <div id="similar-warning" class="warning hidden"></div>
 
+      <!-- Label previews (generated at parse time) -->
+      <div class="label-preview-row">
+        <div class="label-preview">
+          <h3>Nutrition</h3>
+          <img id="nutrition-preview" alt="Nutrition label">
+        </div>
+        <div class="label-preview">
+          <h3>Recipe Card</h3>
+          <img id="recipe-preview" alt="Recipe card label">
+        </div>
+      </div>
+
+      <div class="upc-display">
+        <span class="upc-label">UPC:</span>
+        <span id="upc-code" class="upc-code"></span>
+      </div>
+
+      <div id="media-warning-confirm" class="warning hidden"></div>
+
       <div class="form-row">
         <label for="recipe-status">Status</label>
         <select id="recipe-status">
@@ -107,37 +128,10 @@
 
       <div class="button-row">
         <button id="back-btn" class="secondary-btn">Back</button>
-        <button id="generate-btn" class="primary-btn">Generate &amp; Print</button>
+        <button id="print-btn" class="primary-btn">Print</button>
       </div>
-      <div id="generate-error" class="error hidden"></div>
-    </section>
-
-    <!-- Step 3: Result -->
-    <section id="result-section" class="card hidden">
-      <h2>Labels Generated</h2>
-      <div class="label-preview-row">
-        <div class="label-preview">
-          <h3>Nutrition</h3>
-          <img id="nutrition-preview" alt="Nutrition label">
-        </div>
-        <div class="label-preview">
-          <h3>Recipe Card</h3>
-          <img id="recipe-preview" alt="Recipe card label">
-        </div>
-      </div>
-
-      <div class="upc-display">
-        <span class="upc-label">UPC:</span>
-        <span id="upc-code" class="upc-code"></span>
-      </div>
-
+      <div id="print-error" class="error hidden"></div>
       <div id="print-status" class="success hidden"></div>
-
-      <div class="button-row">
-        <button id="reprint-btn" class="secondary-btn">Print Again</button>
-        <button id="download-btn" class="secondary-btn">Download Labels</button>
-        <button id="new-recipe-btn" class="primary-btn">New Recipe</button>
-      </div>
     </section>
 
     <!-- Recipe History -->

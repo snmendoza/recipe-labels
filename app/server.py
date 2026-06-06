@@ -10,7 +10,7 @@ from . import labels, macros, printing, recipes
 
 app = Flask(__name__)
 
-DATA_DIR = os.environ.get("DATA_DIR", "/data")
+DATA_DIR = os.path.abspath(os.environ.get("DATA_DIR", "/data"))
 LABELS_DIR = os.path.join(DATA_DIR, "labels")
 RECIPES_MD = os.path.join(DATA_DIR, "recipes.md")
 
@@ -61,10 +61,58 @@ def api_parse():
         # Generate a suffix
         suffix = recipes.generate_suffix(RECIPES_MD)
 
+        # For repeats, reuse existing UPC; otherwise generate new
+        reuse_upc = ""
+        if similar:
+            reuse_upc = similar[0]["entry"].get("upc", "")
+
+        per_100 = data.get("per_100g", {})
+        totals = data.get("totals", {})
+        title = f"{suggested_name} {suffix}"
+        cal = int(per_100.get("cal", 0))
+        fat = float(per_100.get("fat", 0))
+        protein = float(per_100.get("protein", 0))
+        carb = float(per_100.get("carb", 0))
+        total_weight = int(totals.get("grams", 0))
+        serving = os.environ.get("SERVING_SIZE_DEFAULT", "100g")
+        upc_str = labels.generate_upc(prefix=2)
+
+        slug = labels.slugify(title)
+        nutrition_path = os.path.join(LABELS_DIR, f"{slug}_nutrition.png")
+        recipe_path = os.path.join(LABELS_DIR, f"{slug}_recipe.png")
+
+        labels.generate_nutrition_label(
+            title=title, cal=cal, fat=fat, protein=protein, carb=carb,
+            serving=serving, upc_str=upc_str, output_path=nutrition_path,
+        )
+
+        ingr_originals = [i.get("original", "") for i in data.get("ingredients", [])]
+        labels.generate_recipe_label(
+            title=title, suffix=suffix, ingredients_list=ingr_originals,
+            cal=cal, fat=fat, protein=protein, carb=carb,
+            total_weight=total_weight, output_path=recipe_path,
+        )
+
+        base = _ingress_path()
+        nutrition_filename = os.path.basename(nutrition_path)
+        recipe_filename = os.path.basename(recipe_path)
+
+        # Get printer media info
+        printer_name = os.environ.get("PRINTER_NAME", "")
+        media_info = printing.get_printer_media(printer_name) if printer_name else {}
+
         result = {
             "macros": data,
             "suggested_name": suggested_name,
             "suffix": suffix,
+            "title": title,
+            "upc": upc_str,
+            "slug": slug,
+            "total_weight": total_weight,
+            "nutrition_label": f"{base}/api/labels/{nutrition_filename}",
+            "recipe_label": f"{base}/api/labels/{recipe_filename}",
+            "nutrition_filename": nutrition_filename,
+            "recipe_filename": recipe_filename,
             "similar_recipes": [
                 {
                     "name": m["entry"]["full_name"],
@@ -74,6 +122,7 @@ def api_parse():
                 }
                 for m in similar
             ],
+            "printer_media": media_info,
         }
         return _api_response(data=result)
 
@@ -258,11 +307,13 @@ def api_health():
         printers = printing.discover_printers()
         entry_count = len(recipes.parse_recipes(RECIPES_MD))
         configured_printer = os.environ.get("PRINTER_NAME", "")
+        media_info = printing.get_printer_media(configured_printer) if configured_printer else {}
         return _api_response(data={
             "status": "ok",
             "printer": configured_printer,
             "printers_available": printers,
             "recipes_count": entry_count,
+            "printer_media": media_info,
         })
     except Exception as e:
         return _api_response(data={"status": "degraded", "error": str(e)})

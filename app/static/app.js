@@ -10,7 +10,6 @@ const parseError = document.getElementById('parse-error');
 
 const confirmSection = document.getElementById('confirm-section');
 const inputSection = document.getElementById('input-section');
-const resultSection = document.getElementById('result-section');
 
 const recipeName = document.getElementById('recipe-name');
 const recipeSuffix = document.getElementById('recipe-suffix');
@@ -22,6 +21,11 @@ const per100Protein = document.getElementById('per100-protein');
 const per100Carb = document.getElementById('per100-carb');
 const calorieWarning = document.getElementById('calorie-warning');
 const similarWarning = document.getElementById('similar-warning');
+const nutritionPreview = document.getElementById('nutrition-preview');
+const recipePreview = document.getElementById('recipe-preview');
+const upcCode = document.getElementById('upc-code');
+const mediaWarning = document.getElementById('media-warning');
+const mediaWarningConfirm = document.getElementById('media-warning-confirm');
 const recipeStatus = document.getElementById('recipe-status');
 const iterationOfRow = document.getElementById('iteration-of-row');
 const iterationOf = document.getElementById('iteration-of');
@@ -29,24 +33,15 @@ const reuseUpc = document.getElementById('reuse-upc');
 const nutritionCopies = document.getElementById('nutrition-copies');
 const recipeCopies = document.getElementById('recipe-copies');
 const backBtn = document.getElementById('back-btn');
-const generateBtn = document.getElementById('generate-btn');
-const generateError = document.getElementById('generate-error');
-
-const nutritionPreview = document.getElementById('nutrition-preview');
-const recipePreview = document.getElementById('recipe-preview');
-const upcCode = document.getElementById('upc-code');
+const printBtn = document.getElementById('print-btn');
+const printError = document.getElementById('print-error');
 const printStatus = document.getElementById('print-status');
-const reprintBtn = document.getElementById('reprint-btn');
-const downloadBtn = document.getElementById('download-btn');
-const newRecipeBtn = document.getElementById('new-recipe-btn');
-
+const healthStatus = document.getElementById('health-status');
 const historySearch = document.getElementById('history-search');
 const historyList = document.getElementById('history-list');
-const healthStatus = document.getElementById('health-status');
 
 // --- State ---
-let currentData = null;    // parsed macro data from /api/parse
-let generatedData = null;  // result from /api/generate
+let currentData = null;  // full response from /api/parse (includes label URLs)
 
 // --- API helper ---
 async function api(path, options = {}) {
@@ -58,13 +53,22 @@ async function api(path, options = {}) {
   return resp.json();
 }
 
-// --- Health check ---
+// --- Health check + media warning ---
 async function checkHealth() {
   try {
     const r = await api('/api/health');
     if (r.success && r.data?.status === 'ok') {
       healthStatus.className = 'status-dot ok';
       healthStatus.title = `Printer: ${r.data.printer || 'none'} | Recipes: ${r.data.recipes_count}`;
+
+      // Check printer media
+      const media = r.data.printer_media;
+      if (media && media.current && !media.match) {
+        mediaWarning.textContent = `Warning: Rollo has ${media.current} labels loaded — need 1.5x1.5`;
+        mediaWarning.classList.remove('hidden');
+      } else if (media && media.match) {
+        mediaWarning.classList.add('hidden');
+      }
     } else {
       healthStatus.className = 'status-dot error';
       healthStatus.title = r.data?.error || 'Unhealthy';
@@ -91,13 +95,8 @@ if (window.SpeechRecognition || window.webkitSpeechRecognition) {
     ingredientsInput.value = transcript;
   };
 
-  recognition.onend = () => {
-    micBtn.classList.remove('recording');
-  };
-
-  recognition.onerror = () => {
-    micBtn.classList.remove('recording');
-  };
+  recognition.onend = () => micBtn.classList.remove('recording');
+  recognition.onerror = () => micBtn.classList.remove('recording');
 }
 
 micBtn.addEventListener('click', () => {
@@ -113,7 +112,7 @@ micBtn.addEventListener('click', () => {
   }
 });
 
-// --- Parse ---
+// --- Parse (also generates labels) ---
 parseBtn.addEventListener('click', async () => {
   const text = ingredientsInput.value.trim();
   if (!text) return;
@@ -150,7 +149,7 @@ parseBtn.addEventListener('click', async () => {
 function showConfirmation(data) {
   const macros = data.macros;
 
-  recipeName.value = `${data.suggested_name} ${data.suffix}`;
+  recipeName.value = data.title;
   recipeSuffix.value = data.suffix;
 
   // Ingredient table
@@ -212,9 +211,26 @@ function showConfirmation(data) {
     reuseUpc.value = '';
   }
 
+  // Label previews
+  nutritionPreview.src = data.nutrition_label;
+  recipePreview.src = data.recipe_label;
+  upcCode.textContent = data.upc;
+
+  // Media warning in confirmation panel
+  const media = data.printer_media;
+  if (media && media.current && !media.match) {
+    mediaWarningConfirm.textContent = `Warning: Rollo has ${media.current} labels loaded — need 1.5x1.5`;
+    mediaWarningConfirm.classList.remove('hidden');
+  } else {
+    mediaWarningConfirm.classList.add('hidden');
+  }
+
+  // Reset print state
+  printStatus.classList.add('hidden');
+  printError.classList.add('hidden');
+
   inputSection.classList.add('hidden');
   confirmSection.classList.remove('hidden');
-  resultSection.classList.add('hidden');
 }
 
 // Status change handler
@@ -232,128 +248,101 @@ backBtn.addEventListener('click', () => {
   inputSection.classList.remove('hidden');
 });
 
-// --- Generate ---
-generateBtn.addEventListener('click', async () => {
-  generateBtn.disabled = true;
-  generateBtn.classList.add('loading');
-  generateBtn.textContent = 'Generating';
-  generateError.classList.add('hidden');
+// --- Print (save to recipes.md + send to printer) ---
+printBtn.addEventListener('click', async () => {
+  if (!currentData) return;
+
+  printBtn.disabled = true;
+  printBtn.classList.add('loading');
+  printBtn.textContent = 'Printing';
+  printError.classList.add('hidden');
+  printStatus.classList.add('hidden');
 
   try {
-    const title = recipeName.value.trim();
     const status = recipeStatus.value;
-    const macros = currentData?.macros || {};
-    const totals = macros.totals || {};
+    const macros = currentData.macros || {};
     const ingredients = (macros.ingredients || []).map(i => i.original);
 
-    const body = {
-      title,
-      cal: parseInt(per100Cal.value) || 0,
-      fat: parseFloat(per100Fat.value) || 0,
-      protein: parseFloat(per100Protein.value) || 0,
-      carb: parseFloat(per100Carb.value) || 0,
-      serving: '100g',
-      total_weight: totals.grams || 0,
-      ingredients,
-      suffix: recipeSuffix.value,
-      status,
-      upc: status === 'repeat' ? reuseUpc.value : '',
-      iteration_of: status === 'iteration' ? iterationOf.value : '',
-    };
-
-    const r = await api('/api/generate', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-
-    if (!r.success) {
-      generateError.textContent = r.error || 'Generation failed';
-      generateError.classList.remove('hidden');
-      return;
-    }
-
-    generatedData = r.data;
-    showResult(r.data, body);
-
-    // Auto-print if copies > 0
-    const nCopies = parseInt(nutritionCopies.value) || 0;
-    const rCopies = parseInt(recipeCopies.value) || 0;
-    if (nCopies > 0 || rCopies > 0) {
-      await doPrint(r.data, nCopies, rCopies);
-    }
-  } catch (e) {
-    generateError.textContent = `Error: ${e.message}`;
-    generateError.classList.remove('hidden');
-  } finally {
-    generateBtn.disabled = false;
-    generateBtn.classList.remove('loading');
-    generateBtn.textContent = 'Generate & Print';
-  }
-});
-
-function showResult(data, body) {
-  nutritionPreview.src = data.nutrition_label;
-  recipePreview.src = data.recipe_label;
-  upcCode.textContent = data.upc;
-
-  confirmSection.classList.add('hidden');
-  resultSection.classList.remove('hidden');
-}
-
-async function doPrint(data, nCopies, rCopies) {
-  try {
-    const r = await api('/api/print', {
+    // Save recipe to recipes.md (via generate endpoint which handles this)
+    const genResult = await api('/api/generate', {
       method: 'POST',
       body: JSON.stringify({
-        nutrition_filename: data.nutrition_filename,
-        recipe_filename: data.recipe_filename,
-        nutrition_copies: nCopies,
-        recipe_copies: rCopies,
+        title: recipeName.value.trim(),
+        cal: parseInt(per100Cal.value) || 0,
+        fat: parseFloat(per100Fat.value) || 0,
+        protein: parseFloat(per100Protein.value) || 0,
+        carb: parseFloat(per100Carb.value) || 0,
+        serving: '100g',
+        total_weight: currentData.total_weight || 0,
+        ingredients,
+        suffix: recipeSuffix.value,
+        status,
+        upc: currentData.upc || '',
+        iteration_of: status === 'iteration' ? iterationOf.value : '',
       }),
     });
 
-    if (r.success) {
-      printStatus.textContent = `Printed: ${(r.data.printed || []).join(', ')} to ${r.data.printer}`;
-      printStatus.classList.remove('hidden');
+    if (!genResult.success) {
+      printError.textContent = genResult.error || 'Save failed';
+      printError.classList.remove('hidden');
+      return;
+    }
+
+    // Print
+    const nCopies = parseInt(nutritionCopies.value) || 0;
+    const rCopies = parseInt(recipeCopies.value) || 0;
+
+    if (nCopies > 0 || rCopies > 0) {
+      const printResult = await api('/api/print', {
+        method: 'POST',
+        body: JSON.stringify({
+          nutrition_filename: currentData.nutrition_filename,
+          recipe_filename: currentData.recipe_filename,
+          nutrition_copies: nCopies,
+          recipe_copies: rCopies,
+        }),
+      });
+
+      if (printResult.success) {
+        printStatus.textContent = `Printed: ${(printResult.data.printed || []).join(', ')} to ${printResult.data.printer}. UPC: ${currentData.upc} — scan in MacroFactor.`;
+        printStatus.className = 'success';
+        printStatus.classList.remove('hidden');
+      } else {
+        printError.textContent = `Print failed: ${printResult.error}`;
+        printError.classList.remove('hidden');
+      }
     } else {
-      printStatus.textContent = `Print failed: ${r.error}`;
-      printStatus.className = 'error';
+      printStatus.textContent = `Saved. UPC: ${currentData.upc} — labels in preview above.`;
+      printStatus.className = 'success';
       printStatus.classList.remove('hidden');
     }
+
+    loadHistory();
   } catch (e) {
-    printStatus.textContent = `Print error: ${e.message}`;
-    printStatus.className = 'error';
-    printStatus.classList.remove('hidden');
+    printError.textContent = `Error: ${e.message}`;
+    printError.classList.remove('hidden');
+  } finally {
+    printBtn.disabled = false;
+    printBtn.classList.remove('loading');
+    printBtn.textContent = 'Print';
   }
-}
-
-// Reprint
-reprintBtn.addEventListener('click', async () => {
-  if (!generatedData) return;
-  printStatus.classList.add('hidden');
-  await doPrint(generatedData, parseInt(nutritionCopies.value) || 1, parseInt(recipeCopies.value) || 1);
 });
 
-// Download
-downloadBtn.addEventListener('click', () => {
-  if (!generatedData) return;
-  [generatedData.nutrition_label, generatedData.recipe_label].forEach(url => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = '';
-    a.click();
-  });
-});
-
-// New recipe
-newRecipeBtn.addEventListener('click', () => {
-  resultSection.classList.add('hidden');
+// --- New Recipe (reset) ---
+function resetToInput() {
+  confirmSection.classList.add('hidden');
   inputSection.classList.remove('hidden');
   ingredientsInput.value = '';
   currentData = null;
-  generatedData = null;
   printStatus.classList.add('hidden');
+  printError.classList.add('hidden');
   loadHistory();
+}
+
+// Listen for "New Recipe" action via keyboard shortcut or clicking back after print
+backBtn.addEventListener('click', () => {
+  confirmSection.classList.add('hidden');
+  inputSection.classList.remove('hidden');
 });
 
 // --- History ---
@@ -361,9 +350,7 @@ async function loadHistory() {
   try {
     const r = await api('/api/recipes');
     if (!r.success) return;
-
-    const entries = r.data || [];
-    renderHistory(entries);
+    renderHistory(r.data || []);
   } catch { /* ignore */ }
 }
 
@@ -388,11 +375,9 @@ function renderHistory(entries, filter = '') {
         </div>
       `;
       div.addEventListener('click', () => {
-        // Populate for reprint or iteration
         ingredientsInput.value = (entry.ingredients || []).join(', ');
         inputSection.classList.remove('hidden');
         confirmSection.classList.add('hidden');
-        resultSection.classList.add('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
       historyList.appendChild(div);
