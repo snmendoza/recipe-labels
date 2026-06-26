@@ -7,11 +7,11 @@ arch:
   - aarch64
 url: "https://github.com/snmendoza/recipe-labels"
 ingress: true
-ingress_port: 5000
+ingress_port: 5050
 panel_icon: "mdi:food-apple-outline"
 panel_title: "Recipe Labels"
 homeassistant_api: false
-host_network: true
+host_network: false
 options:
   anthropic_api_key: ""
   printer_name: "Rollo"
@@ -27,6 +27,6 @@ schema:
 map:
   - data:rw
 ports:
-  5000/tcp: null
+  5050/tcp: null
 startup: "application"
 init: false

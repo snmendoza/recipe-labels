@@ -22,5 +22,6 @@ if [ ! -f "$DATA_DIR/recipes.md" ]; then
 fi
 
 # Start Flask
+export PORT=5050
 cd /app
 exec python3 -m app.server
